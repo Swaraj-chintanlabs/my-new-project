@@ -1,6 +1,8 @@
 # PageData Capture: PRD + LLD
 
-Chrome extension that captures a full web page, extracts **structured records** (products, leads, invoices) with an LLM, lets the user review them, and pushes them to a cloud store so any project can read them through an API instead of hand-built Excel sheets.
+Chrome extension that extracts **structured records** (products, leads, invoices) directly from a page's **DOM** with deterministic scripts, lets the user review them, and pushes them to the team's own cloud store so any project can read them through an API instead of hand-built Excel sheets.
+
+**No third-party AI/LLM is used.** Page content never leaves the browser except to the team's own backend. This avoids the legal exposure of sharing page data with an external AI provider.
 
 ---
 
@@ -12,11 +14,12 @@ Collecting data from websites means copy-pasting into spreadsheets, which is slo
 ## 2. Goals
 - G1. One click (or auto on allowed sites) turns a page into clean structured JSON.
 - G2. Data lands in a central cloud store, queryable by any project via API.
-- G3. Works on any layout, including image-heavy and canvas pages, because extraction is vision-based and not tied to a DOM scraper.
-- G4. Human-in-the-loop review before data is stored.
+- G3. Extraction is deterministic, repeatable and auditable: same page, same output.
+- G4. No page data is sent to any third-party AI service.
+- G5. Human-in-the-loop review before data is stored.
 
 ## 3. Non-goals (v1)
-Crawling many pages unattended, bypassing logins or paywalls, team and role management, a mobile app, Firefox/Safari.
+LLM or OCR extraction, screenshots, crawling many pages unattended, bypassing logins or paywalls, team and role management, Firefox/Safari.
 
 ## 4. Users
 Solo operator or small team who collects product, lead and invoice data from the web and feeds it into other projects.
@@ -25,54 +28,55 @@ Solo operator or small team who collects product, lead and invoice data from the
 | ID | Story | Priority |
 |---|---|---|
 | US1 | Sign in once in the extension | P0 |
-| US2 | Open a page, pick a type (Product / Lead / Invoice) or Auto, and click Capture | P0 |
+| US2 | Open a page, pick a type (Product / Lead / Invoice) or Auto, click Capture | P0 |
 | US3 | See extracted records in an editable table and fix values | P0 |
 | US4 | Approve and push to cloud; duplicates update instead of duplicating | P0 |
-| US5 | Capture works on long pages (full page, not only the visible area) | P0 |
+| US5 | Whole page is covered, including lazy-loaded lists | P0 |
 | US6 | If offline or the API fails, the capture is queued and retried | P1 |
 | US7 | Auto-run on allowlisted domains | P1 |
 | US8 | Browse and export stored records (CSV, JSON) | P1 |
-| US9 | Remember the chosen type per domain | P2 |
+| US9 | Add support for a new site by point-and-click mapping (no code release) | P2 |
 
 ## 6. Functional requirements
-- FR1. Full-page screenshot with no user region selection, including pages taller than one viewport.
-- FR2. DOM context (text, tables, JSON-LD, meta) captured alongside the screenshot to raise accuracy.
-- FR3. Server-side LLM extraction into a fixed JSON schema per type; the API key never reaches the client.
-- FR4. Review UI: editable grid, delete row, confidence flags on low-confidence fields.
+- FR1. Extraction runs fully in the browser against the live DOM. It uses, in priority order: JSON-LD, Microdata/RDFa, OpenGraph/meta tags, site adapters (selector configs), then generic table parsing.
+- FR2. Site adapters are declarative JSON (selectors, attributes, whitelisted transforms), stored in the backend and cached by the extension, so new sites need no extension release.
+- FR3. Each field carries a `source` tag (`jsonld`, `microdata`, `adapter`, `table`) used as its confidence signal.
+- FR4. Review UI: editable grid, delete row, highlight of fields that are missing or came from weaker sources.
 - FR5. Upsert by deterministic `dedupe_key`.
 - FR6. Auth with per-user data isolation.
-- FR7. Settings: allowlist, auto-run, default type, max page height.
+- FR7. Settings: allowlist, auto-run, default type.
+- FR8. When nothing structured is found, say so plainly and offer "create adapter" (P2) rather than guess.
 
 ## 7. Non-functional requirements
 | Area | Target |
 |---|---|
-| Latency | Capture to review shown in under 20 s (p95) for a page of up to 20k px |
-| Accuracy | At least 95% field-level on a labelled set of 100 pages per type (measured in M3) |
-| Privacy | Per-user row-level security; no data kept by the LLM provider beyond the request; screenshots optional |
+| Latency | Capture to review shown in under 3 s (p95) for typical pages |
+| Accuracy | At least 98% field-level on supported sites (measured on saved fixtures); unsupported sites return nothing rather than wrong data |
+| Privacy and legal | Page data goes only to the team's own Supabase project (region chosen to match legal requirements); no third-party processors; per-user RLS; delete-my-data action |
 | Reliability | Offline queue with retry and exponential backoff |
-| Cost | Under $0.05 per page on average; daily per-user cap |
-| Security | MV3 with minimal permissions; token in `chrome.storage.session` |
+| Cost | No per-page variable cost |
+| Security | MV3 with minimal permissions; token in extension storage; no remote code |
 
 ## 8. Success metrics
-Pages captured per week, percentage of captures approved without edits (target at least 80%), time per record vs. manual (target 10x faster), cost per page.
+Pages captured per week, percentage of captures approved without edits (target at least 90%), time per record vs. manual (target 10x faster), number of supported sites.
 
 ## 9. Risks
 | Risk | Mitigation |
 |---|---|
-| Debugger banner annoys users | Documented; stitch fallback in v2 |
-| Very tall pages blow up size or cost | Tile cap (8), max height setting |
-| LLM hallucinates values | Constrain to visible data, per-field confidence, mandatory review |
-| Site terms of service | Manual-trigger default; user is responsible; allowlist for auto-run |
-| Personal data in leads | Consent notice, RLS, delete endpoint |
+| Sites without structured markup | Site adapters; generic table parser; clear "nothing found" state |
+| Site markup changes break adapters | Adapters are data, so fixing one is a DB update; fixtures run in CI/nightly to detect breakage |
+| Site terms of service | Manual trigger by default; allowlist for auto-run; user is responsible for permitted use |
+| Personal data in leads (GDPR, India DPDP, etc.) | Collect only needed fields, consent notice, RLS, retention setting, delete endpoint |
+| Remote adapter config abused | Only selectors and whitelisted transforms; no eval, no code; adapters written by admins only |
 
 ## 10. Milestones
 | M | Scope | Output |
 |---|---|---|
 | M1 | Supabase project, tables, RLS, auth | DB migration applied |
-| M2 | Extension capture, tiling, and DOM extraction | Local capture of any page |
-| M3 | `extract` Edge Function + review UI + push | End-to-end Product flow, accuracy eval |
-| M4 | Lead and Invoice schemas, dedupe, offline queue | P0 and most P1 |
-| M5 | Allowlist and auto-run, records browser, CSV export | v1 release |
+| M2 | Extension shell, side panel, content-script runner, generic extractors (JSON-LD, Microdata, meta, tables) | Product extracted from schema.org pages |
+| M3 | Adapter engine, review UI, push and dedupe | End-to-end flow on 3 real sites |
+| M4 | Lead and Invoice schemas, offline queue, fixture test suite | P0 and most P1 |
+| M5 | Allowlist and auto-run, records browser, CSV export, adapter admin | v1 release |
 
 ---
 
@@ -81,32 +85,37 @@ Pages captured per week, percentage of captures approved without edits (target a
 ## 1. Architecture
 ```
 ┌──────────────── Chrome Extension (MV3) ────────────────┐
-│ Service Worker ── debugger capture, tiling, queue, API │
-│ Content Script ── DOM context (text, tables, JSON-LD)  │
-│ Side Panel (React) ── type picker, review grid, push   │
+│ Content Script ── extractors + adapter engine (DOM)    │
+│ Service Worker ── adapter cache, queue, push           │
+│ Side Panel (React) ── type picker, review grid         │
 └───────────────┬────────────────────────────────────────┘
-                │ HTTPS, Supabase JWT
+                │ HTTPS, Supabase JWT (PostgREST)
 ┌───────────────▼───────────── Supabase ─────────────────┐
-│ Auth │ Edge Function `extract` ──► Claude API (vision) │
-│ Postgres (RLS): records, profiles │ Storage (optional) │
+│ Auth │ Postgres (RLS): records, adapters │ no AI calls  │
 └────────────────────────────────────────────────────────┘
    Other projects ──► PostgREST / supabase-js ──► records
 ```
-Push to `records` goes directly from the extension via PostgREST (RLS enforces the owner), so there is only **one** custom server function.
+There is **no custom server code**. The extension talks to Postgres through PostgREST, and RLS enforces ownership.
 
 ## 2. Repository layout
 ```
 extension/
   manifest.json
   src/
-    background.ts      # capture, tiling, queue, messaging
-    content.ts         # DOM context
-    sidepanel/         # React app: App.tsx, ReviewGrid.tsx, api.ts
-    shared/types.ts    # Record types, schemas, message types
-  vite.config.ts       # @crxjs/vite-plugin
+    content/
+      index.ts          # message handler, orchestrates extraction
+      extractors/       # jsonld.ts, microdata.ts, meta.ts, tables.ts
+      adapter.ts        # declarative adapter engine
+      normalize.ts      # price, date, currency, url helpers
+    background.ts       # adapter cache, queue, push
+    sidepanel/          # React: App.tsx, ReviewGrid.tsx
+    shared/types.ts     # schemas (Zod), message types
+  vite.config.ts        # @crxjs/vite-plugin
 supabase/
   migrations/0001_init.sql
-  functions/extract/index.ts
+tests/
+  fixtures/             # saved HTML per site
+  extract.test.ts
 docs/PRD-LLD.md
 ```
 
@@ -114,7 +123,7 @@ docs/PRD-LLD.md
 ```json
 {
   "manifest_version": 3,
-  "permissions": ["debugger", "activeTab", "scripting", "storage", "sidePanel", "alarms"],
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel", "alarms"],
   "host_permissions": ["https://<project>.supabase.co/*"],
   "optional_host_permissions": ["<all_urls>"],
   "background": { "service_worker": "src/background.ts", "type": "module" },
@@ -122,159 +131,162 @@ docs/PRD-LLD.md
   "action": { "default_title": "Capture page" }
 }
 ```
-`activeTab` covers manual capture; `<all_urls>` is requested only when the user enables auto-run on a domain.
+`activeTab` covers manual capture; `<all_urls>` is requested only when the user enables auto-run on a domain. The `debugger` permission is not needed.
 
-## 4. Capture algorithm (background.ts)
-1. `chrome.debugger.attach({tabId}, "1.3")`.
-2. Optional pre-scroll to the bottom and back (once) to trigger lazy-load; wait for `Network.idle` (about 800 ms with no requests, 5 s max).
-3. `Page.getLayoutMetrics` → `cssContentSize {width, height}`; `H = min(height, MAX_H)` with `MAX_H = 30000`.
-4. Tile plan: `TILE_H = 1600` CSS px, `OVERLAP = 80`, `scale = min(1, 1568 / width)` so the long edge stays within model limits; `N = ceil((H - OVERLAP) / (TILE_H - OVERLAP))`, capped at 8 (if exceeded, increase `TILE_H`).
-5. For each tile: `Page.captureScreenshot {format:"jpeg", quality:80, captureBeyondViewport:true, clip:{x:0,y:i*(TILE_H-OVERLAP),width,height:TILE_H,scale}}` → base64.
-6. `chrome.debugger.detach`. Always detach in `finally`.
-7. Ask the content script for the DOM context (section 5) and build the payload.
+## 4. Extraction pipeline (content script)
+Input: `kind` (`product|lead|invoice|auto`). Output: `ExtractedRecord[]`.
 
-## 5. DOM context (content.ts)
-```ts
-type DomContext = {
-  url: string; title: string; lang: string;
-  jsonld: unknown[];            // all <script type="application/ld+json">
-  meta: Record<string,string>;  // og:*, product:*, twitter:*
-  text: string;                 // document.body.innerText, collapsed, first 30k chars
-  tables: string[][][];         // up to 10 tables, 200 rows each
+1. **Ready:** wait for `document.readyState === "complete"`. For list pages, auto-scroll to the bottom in steps (max 15 s or until height stops growing) to load lazy content, then scroll back.
+2. **Run extractors in priority order** and merge by field (higher-priority source wins, each field keeps its `source`):
+   1. `jsonld`: parse every `<script type="application/ld+json">`, flatten `@graph`, map `Product`, `Offer`, `Person`, `Organization`, `Invoice`, `ItemList`.
+   2. `microdata`: read `[itemscope][itemtype]` trees.
+   3. `meta`: `og:*`, `product:*`, `twitter:*`, `<title>`, canonical URL.
+   4. `adapter`: look up an adapter for the current host and path (section 5) and apply it.
+   5. `table`: for Invoice and list data, parse `<table>` with a header row; map headers by synonym list (e.g. "Qty", "Quantity").
+3. **Normalize:** prices to numbers and ISO 4217 currency, dates to ISO 8601, URLs to absolute, whitespace collapsed.
+4. **Validate** with the Zod schema for the kind; drop records missing required fields and report them as warnings.
+5. **Auto kind:** classify by what was found (JSON-LD `@type`, adapter `kind`, invoice-like table headers). If ambiguous, ask the user to choose.
+6. Compute `dedupe_key` (section 7).
+
+## 5. Site adapters (declarative, no code)
+Stored in `adapters` table, fetched at start and cached in `chrome.storage.local` with a version number and refreshed periodically.
+```json
+{
+  "id": "example-shop-product-list",
+  "host": "www.example-shop.com",
+  "path_regex": "^/category/",
+  "kind": "product",
+  "list": { "selector": "div.product-card" },
+  "fields": {
+    "name":  { "selector": "h2.title", "attr": "text" },
+    "price": { "selector": ".price", "attr": "text", "transform": ["number"] },
+    "url":   { "selector": "a", "attr": "href", "transform": ["absUrl"] },
+    "image_url": { "selector": "img", "attr": "src", "transform": ["absUrl"] },
+    "sku":   { "selector": ".sku", "attr": "text", "transform": ["regex:SKU[:\\s]*(\\w+)"] }
+  },
+  "detail": { "enabled": false }
 }
 ```
-JSON-LD gives near-perfect Product and Invoice-like data on many sites and is cross-checked against the screenshot.
+- Without `list`, the adapter runs once against the whole document (single item page).
+- Allowed `attr`: `text`, `html` (sanitized to text), `href`, `src`, `content`, `value`, or any `data-*`.
+- Whitelisted `transform`: `trim`, `number`, `currency`, `date`, `absUrl`, `lower`, `regex:<pattern>`. No eval, no function strings.
+- Adapters are authored by admins (service role) and read-only for users via RLS.
 
 ## 6. Message contracts
 ```ts
-// SidePanel → SW
-{ type: "CAPTURE", kind: "product"|"lead"|"invoice"|"auto" }
-// SW → SidePanel (progress)
-{ type: "PROGRESS", stage: "capturing"|"extracting"|"done"|"error", pct: number }
-// SW → SidePanel (result)
-{ type: "RESULT", kind, records: ExtractedRecord[], page: {url,title} }
+// SidePanel → Content (via SW)
+{ type: "EXTRACT", kind: "product"|"lead"|"invoice"|"auto" }
+// Content → SidePanel
+{ type: "RESULT", kind, records: ExtractedRecord[], warnings: string[], page: {url,title} }
 // SidePanel → SW
 { type: "PUSH", kind, records: ExtractedRecord[], page }
+// ExtractedRecord
+{ data: Record<string,unknown>, sources: Record<string,"jsonld"|"microdata"|"meta"|"adapter"|"table"> }
 ```
 
-## 7. `extract` Edge Function
-`POST /functions/v1/extract` with header `Authorization: Bearer <supabase jwt>`
-
-Request:
-```json
-{ "kind": "product|lead|invoice|auto",
-  "page": { "url": "...", "title": "..." },
-  "dom": { "...DomContext" },
-  "images": ["<base64 jpeg>", "..."] }
-```
-Response:
-```json
-{ "kind": "product",
-  "records": [ { "data": { "...fields" }, "confidence": { "price": 0.98 } } ] }
-```
-Steps: verify JWT → enforce daily quota (count in `usage`) → validate size (≤ 8 images, ≤ 6 MB) → call Claude with images + trimmed DOM and a **forced tool call** whose `input_schema` is the JSON Schema for `kind` → validate output with Zod → return.
-
-Prompt rules: extract only values visible on the page or present in the DOM; use `null` for unknown fields; never infer or invent; normalise currency to ISO 4217 and dates to ISO 8601; return one record per item for list pages; if `kind=auto`, classify first, then extract.
-
-Model: `claude-sonnet-5-5` (vision + tool use). Keep the prompt prefix stable to benefit from prompt caching.
-
-## 8. Schemas (shared/types.ts, mirrored in the function)
+## 7. Schemas and dedupe
 ```ts
 Product { name, sku?, brand?, price?, currency?, availability?, image_url?, url, description? }
 Lead    { full_name, company?, title?, email?, phone?, linkedin?, location?, source_url }
 Invoice { vendor, invoice_no, issue_date, due_date?, currency, subtotal?, tax?, total,
           bill_to?, line_items: { description, qty, unit_price, amount }[] }
 ```
-Dedupe key (computed in the extension and recomputed by a DB trigger):
+Dedupe key (computed in the extension, enforced by the DB unique index):
 - product: `sha1("product|" + host + "|" + (sku ?? normalizedUrl))`
 - lead: `sha1("lead|" + (email ?? linkedin ?? full_name + "|" + company))`
 - invoice: `sha1("invoice|" + vendor.lower + "|" + invoice_no)`
 
-## 9. Database (migrations/0001_init.sql)
+## 8. Database (migrations/0001_init.sql)
 ```sql
 create table public.records (
-  id            uuid primary key default gen_random_uuid(),
-  user_id       uuid not null default auth.uid() references auth.users on delete cascade,
-  kind          text not null check (kind in ('product','lead','invoice')),
-  data          jsonb not null,
-  confidence    jsonb,
-  source_url    text not null,
-  page_title    text,
-  dedupe_key    text not null,
-  captured_at   timestamptz not null default now(),
-  updated_at    timestamptz not null default now(),
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null default auth.uid() references auth.users on delete cascade,
+  kind         text not null check (kind in ('product','lead','invoice')),
+  data         jsonb not null,
+  sources      jsonb,
+  source_url   text not null,
+  page_title   text,
+  dedupe_key   text not null,
+  captured_at  timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
   unique (user_id, dedupe_key)
 );
 create index records_kind_idx on public.records (user_id, kind, captured_at desc);
 create index records_data_gin on public.records using gin (data jsonb_path_ops);
 
-create table public.usage (
-  user_id uuid references auth.users on delete cascade,
-  day date default current_date,
-  calls int not null default 0,
-  primary key (user_id, day)
+create table public.adapters (
+  id         text primary key,
+  host       text not null,
+  kind       text not null,
+  config     jsonb not null,
+  version    int  not null default 1,
+  enabled    boolean not null default true,
+  updated_at timestamptz not null default now()
 );
+create index adapters_host_idx on public.adapters (host) where enabled;
 
-alter table public.records enable row level security;
-alter table public.usage   enable row level security;
+alter table public.records  enable row level security;
+alter table public.adapters enable row level security;
 create policy records_owner on public.records
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy usage_owner on public.usage for select using (user_id = auth.uid());
+create policy adapters_read on public.adapters
+  for select using (auth.role() = 'authenticated' and enabled);
 ```
-The `usage` table is written only by the Edge Function using the service role.
-
-Push (upsert) from the extension:
+Push from the extension:
 ```ts
 supabase.from("records").upsert(rows, { onConflict: "user_id,dedupe_key" })
 ```
-Typed views per kind can be added later, e.g. `create view products as select data->>'name' as name, (data->>'price')::numeric as price, ... from records where kind='product'`.
+Typed views per kind (e.g. `products`) can be added later for downstream projects.
 
-## 10. Auth
-Supabase email magic link or Google via `chrome.identity.launchWebAuthFlow`. Session stored in `chrome.storage.local`; the access token is refreshed in the service worker. The anon key in the extension is public by design; RLS is the protection.
+## 9. Auth
+Supabase email magic link or Google via `chrome.identity.launchWebAuthFlow`. Session in `chrome.storage.local`; token refreshed in the service worker. The anon key in the extension is public by design; RLS is the protection.
 
-## 11. Offline queue
-Pending pushes are stored in `chrome.storage.local` under `queue`. A `chrome.alarms` job every minute retries with exponential backoff (1, 2, 4, 8 min, max 30 min). Items are removed only after a 2xx response, and upserts are idempotent thanks to `dedupe_key`.
+## 10. Offline queue
+Pending pushes are stored in `chrome.storage.local` under `queue`. A `chrome.alarms` job every minute retries with exponential backoff (1, 2, 4, 8 min, max 30 min). Items are removed only after a 2xx response; upserts are idempotent thanks to `dedupe_key`.
 
-## 12. Review UI (sidepanel)
-- Type picker (Product / Lead / Invoice / Auto) and **Capture** button; progress bar from `PROGRESS` messages.
-- Grid with one row per record and one column per field; inline edit, row delete, and an amber highlight on fields with confidence below 0.8.
+## 11. Review UI (side panel)
+- Type picker (Product / Lead / Invoice / Auto) and **Capture** button.
+- Grid with one row per record, one column per field; inline edit and row delete. Missing required fields are red; fields from weaker sources (`table`, `meta`) are amber. A tooltip shows each field's source.
 - Invoice rows expand to show line items.
 - **Push all** and **Copy JSON**; toast with the count of new vs. updated records.
+- Empty state: "No structured data found on this page" with a link to request or create an adapter.
 
-## 13. Error handling
+## 12. Error handling
 | Case | Behaviour |
 |---|---|
 | `chrome://` or Web Store page | Disable Capture, show reason |
-| Debugger attach fails (DevTools already open) | Retry once, then show a clear message |
-| Page above `MAX_H` | Capture the top `MAX_H` and warn |
-| Extract 4xx/5xx | Show the error and keep the captured payload for retry |
-| Quota exceeded | Show remaining quota and reset time |
+| Nothing extracted | Empty state, no guessing |
+| Validation failure on some records | Show valid ones, list warnings for the rest |
+| Adapter fetch fails | Use the cached adapters; generic extractors still run |
 | Push failure | Queue and retry in the background |
+| Session expired | Prompt sign-in, keep captured data in the panel |
 
-## 14. Security and privacy
-- Claude key only in Edge Function secrets.
-- Strict CSP; no remote code; no `eval`.
-- Screenshots are not stored by default (optional toggle saves to a private Storage bucket).
-- Delete-my-data action removes all `records` for the user.
+## 13. Security and privacy
+- Page data goes only to the team's own Supabase project; pick the region to match legal requirements and sign a DPA if personal data is stored.
+- No third-party AI, analytics or telemetry that includes page content.
+- Strict CSP; no remote code; no `eval`; adapter transforms are a fixed whitelist.
+- Delete-my-data action removes all `records` for the user; optional retention period setting.
 - Logs exclude page content.
 
-## 15. Testing
-- **Unit:** tiling math, dedupe keys, schema validation (Vitest).
-- **Integration:** Edge Function against 10 saved fixtures per type (screenshot + DOM), checking exact-match fields.
-- **E2E:** Playwright with the extension loaded against local fixture pages (long page, lazy-load, table list).
-- **Accuracy eval (M3):** a labelled set of 100 pages per type with per-field accuracy reporting, run before each release.
+## 14. Testing
+- **Unit:** each extractor, normalizers, dedupe keys, Zod schemas, adapter engine (Vitest + jsdom).
+- **Fixtures:** saved HTML snapshots per supported site and kind, with expected JSON. A change in output fails CI.
+- **Nightly check (P1):** fetch live pages for supported sites and compare against expected shape to catch markup changes early.
+- **E2E:** Playwright with the extension loaded against local fixture pages (JSON-LD page, adapter list page, lazy-load page, invoice table).
 
-## 16. Build order
+## 15. Build order
 1. `0001_init.sql`, Supabase auth and project config.
 2. Manifest, Vite setup, empty side panel opened from the toolbar.
-3. `content.ts` DOM context, then `background.ts` capture and tiling; verify on a 20k px page.
-4. `extract` function with the Product schema; wire the CAPTURE → RESULT flow.
-5. Review grid and push; verify upsert and dedupe.
-6. Add Lead and Invoice schemas and prompts; run the accuracy eval.
+3. `normalize.ts`, JSON-LD, Microdata and meta extractors with fixtures; Product flow working end to end.
+4. Review grid and push; verify upsert and dedupe.
+5. Adapter engine, `adapters` table fetch and cache; add 3 real site adapters.
+6. Lead and Invoice schemas and table extractor.
 7. Offline queue, settings, allowlist and auto-run, records browser and CSV export.
-8. Package and publish (private/unlisted first).
+8. P2: point-and-click adapter builder.
+9. Package and publish (private/unlisted first).
 
-## 17. Open decisions
-- Allow screenshot storage by default? (Recommended: no.)
+## 16. Open decisions
+- Supabase region and whether a DPA is required for the personal data in leads.
+- Which sites to support first (this drives the first adapters).
 - Auto-run default: off, allowlist only. (Recommended.)
-- Daily quota value (suggest 200 pages per user per day).
+- Retention period for lead data.
